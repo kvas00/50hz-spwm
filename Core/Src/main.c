@@ -42,14 +42,15 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+TIM_HandleTypeDef htim10;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_TIM10_Init(void);
+void delay_ms(uint32_t ms);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -87,7 +88,8 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-
+  MX_TIM10_Init();
+  HAL_TIM_Base_Start(&htim10);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -97,6 +99,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // Toggle LED on PC13 using direct register access
+    GPIOC->ODR ^= GPIO_PIN_13;
+
+    // Precise 500ms delay using TIM10
+    delay_ms(500);
   }
   /* USER CODE END 3 */
 }
@@ -177,6 +184,45 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+  * @brief TIM10 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM10_Init(void)
+{
+  // TIM10 is on APB2 bus running at 84 MHz
+  // Configure for 1ms tick: 84MHz / (83+1) / (999+1) = 1000 Hz = 1ms
+  htim10.Instance = TIM10;
+  htim10.Init.Prescaler = 83;           // 84MHz / 84 = 1MHz
+  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim10.Init.Period = 999;             // 1MHz / 1000 = 1kHz = 1ms
+  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+
+  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief Precise millisecond delay using TIM10
+  * @param ms: delay in milliseconds
+  * @retval None
+  */
+void delay_ms(uint32_t ms)
+{
+  for(uint32_t i = 0; i < ms; i++)
+  {
+    // Reset counter
+    __HAL_TIM_SET_COUNTER(&htim10, 0);
+
+    // Wait for 1ms (counter reaches Period value)
+    while(__HAL_TIM_GET_COUNTER(&htim10) < 999);
+  }
+}
 
 /* USER CODE END 4 */
 
