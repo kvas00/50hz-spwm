@@ -50,6 +50,7 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 static void System_Init_NoHAL(void);
 static void GPIO_Init_NoHAL(void);
+static void TIM1_PWM_50Hz_Init_NoHAL(void);
 static void TIM10_Init_NoHAL(void);
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
@@ -88,6 +89,7 @@ int main(void)
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
   GPIO_Init_NoHAL();
+  TIM1_PWM_50Hz_Init_NoHAL();
   TIM10_Init_NoHAL();
   /* USER CODE END 2 */
 
@@ -164,7 +166,6 @@ static void GPIO_Init_NoHAL(void)
 
   /* GPIO Ports Clock Enable - direct register access */
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;  // Enable GPIOC clock
-  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;  // Enable GPIOH clock
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;  // Enable GPIOA clock
 
   // Wait for clocks to stabilize
@@ -195,10 +196,112 @@ static void GPIO_Init_NoHAL(void)
   GPIOC->ODR &= ~(1UL << 13);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /*Configure PA8 and PA7 for TIM1 PWM (Alternate Function)
+   * PA8 -> TIM1_CH1 (AF1)
+   * PA7 -> TIM1_CH1N (AF1 - complementary output)
+   */
+
+  // PA8: TIM1_CH1
+  GPIOA->MODER &= ~(0x3UL << (8 * 2));    // Clear bits
+  GPIOA->MODER |= (0x2UL << (8 * 2));     // Set to Alternate Function (10)
+  GPIOA->OTYPER &= ~(1UL << 8);           // Push-pull
+  GPIOA->OSPEEDR |= (0x3UL << (8 * 2));   // Very high speed
+  GPIOA->PUPDR &= ~(0x3UL << (8 * 2));    // No pull-up/pull-down
+  // Set AF1 for PA8 (AFR[1] = AFRH, pin 8)
+  GPIOA->AFR[1] &= ~(0xFUL << ((8 - 8) * 4));
+  GPIOA->AFR[1] |= (0x1UL << ((8 - 8) * 4));  // AF1
+
+  // PA7: TIM1_CH1N (complementary)
+  GPIOA->MODER &= ~(0x3UL << (7 * 2));    // Clear bits
+  GPIOA->MODER |= (0x2UL << (7 * 2));     // Set to Alternate Function (10)
+  GPIOA->OTYPER &= ~(1UL << 7);           // Push-pull
+  GPIOA->OSPEEDR |= (0x3UL << (7 * 2));   // Very high speed
+  GPIOA->PUPDR &= ~(0x3UL << (7 * 2));    // No pull-up/pull-down
+  // Set AF1 for PA7 (AFR[0] = AFRL, pin 7)
+  GPIOA->AFR[0] &= ~(0xFUL << (7 * 4));
+  GPIOA->AFR[0] |= (0x1UL << (7 * 4));    // AF1
 /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+  * @brief TIM1 PWM 50Hz Initialization without HAL - direct register access
+  * @param None
+  * @retval None
+  *
+  * TIM1 configuration for 50 Hz square wave with complementary outputs and dead-time:
+  * - APB2 clock: 84 MHz
+  * - Target frequency: 50 Hz
+  * - Prescaler: 0 (no division)
+  * - ARR: 1679 -> 84 MHz / 1680 / 1000 = 50 Hz
+  * - CCR1: 840 -> 50% duty cycle (square wave/meander)
+  * - Dead-time: ~2 µs (168 ticks at 84 MHz)
+  *
+  * Outputs:
+  * - PA8: TIM1_CH1 (main output)
+  * - PA7: TIM1_CH1N (complementary output with dead-time)
+  */
+static void TIM1_PWM_50Hz_Init_NoHAL(void)
+{
+  // Enable TIM1 clock (bit 0 in RCC_APB2ENR)
+  RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+
+  // Wait for clock to stabilize
+  __DSB();
+
+  // Configure TIM1 for 50 Hz PWM
+  // Formula: Freq = TIM_CLK / ((PSC+1) * (ARR+1))
+  // 50 Hz = 84 MHz / (1 * 1680) = 50 kHz / 1000
+  TIM1->PSC = 0;              // Prescaler: no division (84 MHz)
+  TIM1->ARR = 1679;           // Auto-reload: 84MHz / 1680 = 50 kHz base
+                              // With CCR adjustment can create 50 Hz
+
+  // For true 50 Hz square wave, we need:
+  // 84 MHz / 50 Hz = 1,680,000 counts per cycle
+  // But ARR is 16-bit (max 65535), so we need prescaler
+  // Let's use PSC = 49, ARR = 33599
+  // 84 MHz / 50 / 33600 = 50 Hz
+  TIM1->PSC = 49;             // Prescaler: 84 MHz / 50 = 1.68 MHz
+  TIM1->ARR = 33599;          // Auto-reload: 1.68 MHz / 33600 = 50 Hz
+  TIM1->CNT = 0;              // Reset counter
+
+  // Configure Channel 1 for PWM mode 1
+  // OC1M = 110 (PWM mode 1), OC1PE = 1 (preload enable)
+  TIM1->CCMR1 &= ~TIM_CCMR1_OC1M;           // Clear OC1M bits
+  TIM1->CCMR1 |= (0x6UL << TIM_CCMR1_OC1M_Pos); // PWM mode 1 (110)
+  TIM1->CCMR1 |= TIM_CCMR1_OC1PE;           // Enable preload
+
+  // Set duty cycle to 50% for square wave (meander)
+  TIM1->CCR1 = 16800;         // 50% of 33600 = 16800
+
+  // Enable main output (MOE) and configure dead-time
+  // Dead-time calculation: DTG = dead_time * f_dtg
+  // For ~2 µs at 84 MHz: DTG = 2µs * 84MHz = 168
+  // DTG[7:0] in BDTR register
+  TIM1->BDTR |= (168 << TIM_BDTR_DTG_Pos);  // Dead-time: ~2 µs
+  TIM1->BDTR |= TIM_BDTR_MOE;               // Main Output Enable
+
+  // Enable complementary output polarity (active high for both)
+  TIM1->CCER &= ~TIM_CCER_CC1P;             // CH1 polarity: active high
+  TIM1->CCER &= ~TIM_CCER_CC1NP;            // CH1N polarity: active high
+
+  // Enable Channel 1 and its complementary output
+  TIM1->CCER |= TIM_CCER_CC1E;              // Enable CH1 output (PA8)
+  TIM1->CCER |= TIM_CCER_CC1NE;             // Enable CH1N output (PA7)
+
+  // Enable auto-reload preload
+  TIM1->CR1 |= TIM_CR1_ARPE;
+
+  // Generate update event to load all preload registers
+  TIM1->EGR |= TIM_EGR_UG;
+
+  // Clear update flag
+  TIM1->SR &= ~TIM_SR_UIF;
+
+  // Start TIM1
+  TIM1->CR1 |= TIM_CR1_CEN;
+}
 
 /**
   * @brief System Initialization without HAL - direct register access
