@@ -42,14 +42,16 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-TIM_HandleTypeDef htim10;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
 /* USER CODE BEGIN PFP */
-static void MX_TIM10_Init(void);
+static void System_Init_NoHAL(void);
+static void GPIO_Init_NoHAL(void);
+static void TIM10_Init_NoHAL(void);
+void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 /* USER CODE END PFP */
 
@@ -71,11 +73,9 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
   /* USER CODE BEGIN Init */
-
+  /* System initialization without HAL */
+  System_Init_NoHAL();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -86,10 +86,9 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-  MX_TIM10_Init();
-  HAL_TIM_Base_Start(&htim10);
+  GPIO_Init_NoHAL();
+  TIM10_Init_NoHAL();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -154,30 +153,46 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief GPIO Initialization Function
+  * @brief GPIO Initialization without HAL - direct register access
   * @param None
   * @retval None
   */
-static void MX_GPIO_Init(void)
+static void GPIO_Init_NoHAL(void)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
 /* USER CODE BEGIN MX_GPIO_Init_1 */
 /* USER CODE END MX_GPIO_Init_1 */
 
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
+  /* GPIO Ports Clock Enable - direct register access */
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;  // Enable GPIOC clock
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;  // Enable GPIOH clock
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;  // Enable GPIOA clock
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(led_GPIO_Port, led_Pin, GPIO_PIN_RESET);
+  // Wait for clocks to stabilize
+  __DSB();
 
-  /*Configure GPIO pin : led_Pin */
-  GPIO_InitStruct.Pin = led_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(led_GPIO_Port, &GPIO_InitStruct);
+  /*Configure PC13 as output (LED) - direct register access
+   * PC13 -> bit 13
+   * MODER: 00 = Input, 01 = Output, 10 = Alternate, 11 = Analog
+   * OTYPER: 0 = Push-pull, 1 = Open-drain
+   * OSPEEDR: 00 = Low, 01 = Medium, 10 = High, 11 = Very High
+   * PUPDR: 00 = No pull, 01 = Pull-up, 10 = Pull-down, 11 = Reserved
+   */
+
+  // Set PC13 to Output mode (01 in MODER bits 27:26)
+  GPIOC->MODER &= ~(0x3UL << (13 * 2));   // Clear bits
+  GPIOC->MODER |= (0x1UL << (13 * 2));    // Set to Output (01)
+
+  // Set PC13 to Push-Pull (0 in OTYPER bit 13)
+  GPIOC->OTYPER &= ~(1UL << 13);
+
+  // Set PC13 to Low speed (00 in OSPEEDR bits 27:26)
+  GPIOC->OSPEEDR &= ~(0x3UL << (13 * 2));
+
+  // Set PC13 to No pull-up/pull-down (00 in PUPDR bits 27:26)
+  GPIOC->PUPDR &= ~(0x3UL << (13 * 2));
+
+  // Set initial output level to LOW (LED off)
+  GPIOC->ODR &= ~(1UL << 13);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -186,25 +201,83 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /**
-  * @brief TIM10 Initialization Function
+  * @brief System Initialization without HAL - direct register access
   * @param None
   * @retval None
+  *
+  * Replaces HAL_Init() functionality:
+  * - Enable Flash instruction cache
+  * - Enable Flash data cache
+  * - Enable Flash prefetch buffer
+  * - Set NVIC priority grouping
   */
-static void MX_TIM10_Init(void)
+static void System_Init_NoHAL(void)
 {
-  // TIM10 is on APB2 bus running at 84 MHz
-  // Configure for 1ms tick: 84MHz / (83+1) / (999+1) = 1000 Hz = 1ms
-  htim10.Instance = TIM10;
-  htim10.Init.Prescaler = 83;           // 84MHz / 84 = 1MHz
-  htim10.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim10.Init.Period = 999;             // 1MHz / 1000 = 1kHz = 1ms
-  htim10.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim10.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  // Enable Flash instruction cache
+  FLASH->ACR |= FLASH_ACR_ICEN;
 
-  if (HAL_TIM_Base_Init(&htim10) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  // Enable Flash data cache
+  FLASH->ACR |= FLASH_ACR_DCEN;
+
+  // Enable Flash prefetch buffer
+  FLASH->ACR |= FLASH_ACR_PRFTEN;
+
+  // Set NVIC Priority Grouping to 4 (4 bits for pre-emption priority, 0 bits for subpriority)
+  // This matches NVIC_PRIORITYGROUP_4 from HAL
+  NVIC_SetPriorityGrouping(0x03); // 0x03 = 4 bits preemption, 0 bits sub-priority
+
+  // Note: We don't need SysTick since we use TIM10 for delays
+}
+
+/**
+  * @brief TIM10 Initialization without HAL - direct register access
+  * @param None
+  * @retval None
+  *
+  * TIM10 configuration:
+  * - APB2 clock: 84 MHz
+  * - Prescaler: 83 -> 84 MHz / 84 = 1 MHz
+  * - Auto-reload: 65535 (max for 16-bit timer)
+  * - Timer tick: 1 microsecond
+  */
+static void TIM10_Init_NoHAL(void)
+{
+  // Enable TIM10 clock (bit 17 in RCC_APB2ENR)
+  RCC->APB2ENR |= RCC_APB2ENR_TIM10EN;
+
+  // Wait for clock to stabilize
+  __DSB();
+
+  // Configure TIM10
+  TIM10->PSC = 83;          // Prescaler: 84 MHz / 84 = 1 MHz (1 us tick)
+  TIM10->ARR = 0xFFFF;      // Auto-reload: maximum value for 16-bit timer
+  TIM10->CNT = 0;           // Reset counter
+
+  // Enable auto-reload preload
+  TIM10->CR1 |= TIM_CR1_ARPE;
+
+  // Generate update event to load prescaler value
+  TIM10->EGR |= TIM_EGR_UG;
+
+  // Clear update flag
+  TIM10->SR &= ~TIM_SR_UIF;
+
+  // Start timer
+  TIM10->CR1 |= TIM_CR1_CEN;
+}
+
+/**
+  * @brief Precise microsecond delay using TIM10
+  * @param us: delay in microseconds (max ~65535 us per call)
+  * @retval None
+  */
+void delay_us(uint32_t us)
+{
+  // Reset counter
+  TIM10->CNT = 0;
+
+  // Wait for specified microseconds
+  while(TIM10->CNT < us);
 }
 
 /**
@@ -216,11 +289,7 @@ void delay_ms(uint32_t ms)
 {
   for(uint32_t i = 0; i < ms; i++)
   {
-    // Reset counter
-    __HAL_TIM_SET_COUNTER(&htim10, 0);
-
-    // Wait for 1ms (counter reaches Period value)
-    while(__HAL_TIM_GET_COUNTER(&htim10) < 999);
+    delay_us(1000);  // 1ms = 1000us
   }
 }
 
